@@ -1,0 +1,22 @@
+name: Keep scheduled checks alive
+
+# 公開リポジトリは60日間更新がないと定期実行が止まるため、月1回だけ heartbeat.txt を更新する
+on:
+  schedule:
+    - cron: "0 0 1 * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > heartbeat.txt
+          git config user.name "deeq-status-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add heartbeat.txt
+          git commit -m "heartbeat" && git push

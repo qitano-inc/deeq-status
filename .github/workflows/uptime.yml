@@ -1,0 +1,51 @@
+name: DEEQ uptime check
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check sites (retry once after 60s)
+        run: |
+          set -u
+          UA="Mozilla/5.0 (DEEQ uptime check; +https://github.com/qitano-inc/deeq-status)"
+          # 名前|URL|中身に含まれるはずの文字列
+          SITES='CRM|https://crm.deeq.jp/login|DEEQ CRM
+          オンライン予約|https://yoyaku.deeq.jp/api/v1/tenants/by-slug/kitano-kinse|tenant_id
+          AI姿勢分析|https://ai.deeq.jp/|<html
+          deeq.jp|https://deeq.jp/|DEEQ
+          qitano.com|https://qitano.com/|QITANO'
+          check() {
+            local url="$1" want="$2" body code
+            body=$(curl -sS -L -m 30 -A "$UA" -w '\n%{http_code}' "$url" 2>/dev/null) || return 1
+            code=$(printf '%s' "$body" | tail -n1)
+            [ "$code" = "200" ] && printf '%s' "$body" | grep -q -- "$want"
+          }
+          down=""
+          while IFS='|' read -r name url want; do
+            name=$(echo "$name" | xargs)
+            [ -z "$name" ] && continue
+            if ! check "$url" "$want"; then down="$down$name|$url|$want"$'\n'; fi
+          done <<< "$SITES"
+          if [ -n "$down" ]; then
+            echo "1回目で応答がなかったサイトを60秒後にもう一度確認します"; sleep 60
+            still=""
+            while IFS='|' read -r name url want; do
+              [ -z "$name" ] && continue
+              if ! check "$url" "$want"; then still="$still- $name（$url）"$'\n'; fi
+            done <<< "$down"
+            if [ -n "$still" ]; then
+              { echo "### 止まっている可能性があるサイト"; echo; echo "$still"; echo "初動手順: 止める→残す→変える→調べる→知らせる（社内の手順書㉞）"; } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::DEEQ のサイトが応答していません: $(echo "$still" | tr '\n' ' ')"
+              exit 1
+            fi
+          fi
+          echo "すべて正常" >> "$GITHUB_STEP_SUMMARY"
