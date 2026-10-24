@@ -1,19 +1,49 @@
 name: DEEQ uptime check
 
+# GitHub の定期実行は混雑時に数時間遅れる（2026-10-22〜23 実測で 3〜5 時間おき）。
+# そこで1回の実行の中で「10分ごとに確認」を約5時間45分くり返し、次の実行はその後ろに並ばせる
+# （concurrency で同時に1つだけ）。公開リポジトリなので GitHub Actions の利用時間は無料。
+# 止まっていたら1分後に再確認し、それでも応答がなければ Issue を作って @qitano-inc に通知（メールが届く）。
+# 復旧したら同じ Issue に書き込んで閉じる。同じ停止で何度も通知しない。
 on:
   schedule:
-    - cron: "*/10 * * * *"
-  workflow_dispatch: {}
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      alert_test:
+        description: "通知のテスト（テスト用の Issue を作ってすぐ閉じる）"
+        type: boolean
+        default: false
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 355
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Check sites (retry once after 60s)
+      - name: Alert test
+        if: ${{ inputs.alert_test }}
+        run: |
+          set -eu
+          N=$(gh issue create -R "$REPO" --title "【テスト】DEEQ 死活監視の通知テスト" \
+            --body "@qitano-inc これは通知のテストです。サイトが止まったときは、このように Issue とメールでお知らせします。
+          実行: $RUN_URL" | grep -o '[0-9]*$')
+          gh issue close "$N" -R "$REPO" -c "テストのため自動で閉じました。"
+          echo "テスト通知 #$N を送りました" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Watch sites every 10 minutes
+        if: ${{ !inputs.alert_test }}
         run: |
           set -u
           UA="Mozilla/5.0 (DEEQ uptime check; +https://github.com/qitano-inc/deeq-status)"
@@ -24,28 +54,48 @@ jobs:
           deeq.jp|https://deeq.jp/|DEEQ
           qitano.com|https://qitano.com/|QITANO'
           check() {
-            local url="$1" want="$2" body code
-            body=$(curl -sS -L -m 30 -A "$UA" -w '\n%{http_code}' "$url" 2>/dev/null) || return 1
+            local body code
+            body=$(curl -sS -L -m 30 -A "$UA" -w '\n%{http_code}' "$1" 2>/dev/null) || return 1
             code=$(printf '%s' "$body" | tail -n1)
-            [ "$code" = "200" ] && printf '%s' "$body" | grep -q -- "$want"
+            [ "$code" = "200" ] && printf '%s' "$body" | grep -q -- "$2"
           }
-          down=""
-          while IFS='|' read -r name url want; do
-            name=$(echo "$name" | xargs)
-            [ -z "$name" ] && continue
-            if ! check "$url" "$want"; then down="$down$name|$url|$want"$'\n'; fi
-          done <<< "$SITES"
-          if [ -n "$down" ]; then
-            echo "1回目で応答がなかったサイトを60秒後にもう一度確認します"; sleep 60
-            still=""
+          down_list() {
+            local out="" name url want
             while IFS='|' read -r name url want; do
-              [ -z "$name" ] && continue
-              if ! check "$url" "$want"; then still="$still- $name（$url）"$'\n'; fi
-            done <<< "$down"
+              name=$(echo "$name" | xargs); [ -z "$name" ] && continue
+              check "$url" "$want" || out="$out$name|$url|$want"$'\n'
+            done <<< "$1"
+            printf '%s' "$out"
+          }
+          gh label create down -R "$REPO" -c B60205 -d "サイトが応答していない" 2>/dev/null || true
+          END=$(( $(date +%s) + 345*60 ))
+          while :; do
+            NOW=$(TZ=Asia/Tokyo date '+%m/%d %H:%M')
+            first=$(down_list "$SITES")
+            still=""
+            if [ -n "$first" ]; then sleep 60; still=$(down_list "$first"); fi
+            OPEN=$(gh issue list -R "$REPO" -l down -s open --json number -q '.[0].number' 2>/dev/null || true)
             if [ -n "$still" ]; then
-              { echo "### 止まっている可能性があるサイト"; echo; echo "$still"; echo "初動手順: 止める→残す→変える→調べる→知らせる（社内の手順書㉞）"; } >> "$GITHUB_STEP_SUMMARY"
-              echo "::error::DEEQ のサイトが応答していません: $(echo "$still" | tr '\n' ' ')"
-              exit 1
+              names=$(printf '%s' "$still" | cut -d'|' -f1 | paste -sd '、' -)
+              echo "$NOW 応答なし: $names"
+              if [ -z "$OPEN" ]; then
+                list=$(printf '%s' "$still" | awk -F'|' '{print "- " $1 "（" $2 "）"}')
+                gh issue create -R "$REPO" -l down --title "【停止の可能性】${names} が応答していません（${NOW}）" \
+                  --body "@qitano-inc ${NOW}（日本時間）に確認したところ、1分おいて2回確認しても応答がありませんでした。
+
+          ${list}
+
+          初動手順: 止める→残す→変える→調べる→知らせる（社内の手順書㉞ AI_TEAM/guidelines/34_incident_response_playbook.md）
+          復旧を確認したら、この Issue に書き込んで自動で閉じます。
+          実行: $RUN_URL" || echo "::warning::Issue を作れませんでした"
+              fi
+            else
+              echo "$NOW すべて正常"
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" -R "$REPO" -c "@qitano-inc ${NOW}（日本時間）にすべてのサイトの応答を確認しました。復旧しています。" || true
+              fi
             fi
-          fi
-          echo "すべて正常" >> "$GITHUB_STEP_SUMMARY"
+            [ $(( $(date +%s) + 600 )) -ge "$END" ] && break
+            sleep 540
+          done
+          echo "この回の見張りを終了（次の回に引き継ぎ）" >> "$GITHUB_STEP_SUMMARY"
