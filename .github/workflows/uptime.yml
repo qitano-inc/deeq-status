@@ -10,13 +10,14 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
-      alert_test:
-        description: "通知のテスト（テスト用の Issue を作ってすぐ閉じる）"
+      simulate_down:
+        description: "停止の練習（存在しないページを1回だけ「止まったサイト」として扱い、通知→復旧の流れを確かめる）"
         type: boolean
         default: false
 
 concurrency:
-  group: uptime
+  # 練習は本番の見張りの後ろに並ばないよう別の列にする
+  group: ${{ inputs.simulate_down && 'uptime-drill' || 'uptime' }}
   cancel-in-progress: false
 
 permissions:
@@ -32,18 +33,7 @@ jobs:
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Alert test
-        if: ${{ inputs.alert_test }}
-        run: |
-          set -eu
-          N=$(gh issue create -R "$REPO" --title "【テスト】DEEQ 死活監視の通知テスト" \
-            --body "@qitano-inc これは通知のテストです。サイトが止まったときは、このように Issue とメールでお知らせします。
-          実行: $RUN_URL" | grep -o '[0-9]*$')
-          gh issue close "$N" -R "$REPO" -c "テストのため自動で閉じました。"
-          echo "テスト通知 #$N を送りました" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Watch sites every 10 minutes
-        if: ${{ !inputs.alert_test }}
         run: |
           set -u
           UA="Mozilla/5.0 (DEEQ uptime check; +https://github.com/qitano-inc/deeq-status)"
@@ -69,9 +59,14 @@ jobs:
           }
           gh label create down -R "$REPO" -c B60205 -d "サイトが応答していない" 2>/dev/null || true
           END=$(( $(date +%s) + 345*60 ))
+          DRILL="${{ inputs.simulate_down && 'yes' || '' }}"; ROUND=0
           while :; do
+            ROUND=$((ROUND+1))
             NOW=$(TZ=Asia/Tokyo date '+%m/%d %H:%M')
-            first=$(down_list "$SITES")
+            TARGETS="$SITES"
+            # 練習: 1回目だけ、存在しないページを「止まったサイト」として混ぜる
+            [ -n "$DRILL" ] && [ "$ROUND" = 1 ] && TARGETS="$SITES"$'\n''練習用（存在しないページ）|https://deeq.jp/__deeq_status_drill__|DEEQ_STATUS_DRILL'
+            first=$(down_list "$TARGETS")
             still=""
             if [ -n "$first" ]; then sleep 60; still=$(down_list "$first"); fi
             OPEN=$(gh issue list -R "$REPO" -l down -s open --json number -q '.[0].number' 2>/dev/null || true)
@@ -95,6 +90,7 @@ jobs:
                 gh issue close "$OPEN" -R "$REPO" -c "@qitano-inc ${NOW}（日本時間）にすべてのサイトの応答を確認しました。復旧しています。" || true
               fi
             fi
+            [ -n "$DRILL" ] && [ "$ROUND" -ge 2 ] && break
             [ $(( $(date +%s) + 600 )) -ge "$END" ] && break
             sleep 540
           done
