@@ -32,7 +32,10 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      # Vercel の利用量の見張り（scripts/vercel-usage.sh）。未登録なら利用量の確認だけ飛ばす
+      VERCEL_USAGE_TOKEN: ${{ secrets.VERCEL_USAGE_TOKEN }}
     steps:
+      - uses: actions/checkout@v4
       - name: Watch sites every 10 minutes
         run: |
           set -u
@@ -48,6 +51,8 @@ jobs:
             local body code
             body=$(curl -sS -L -m 30 -A "$UA" -w '\n%{http_code}' "$1" 2>/dev/null) || return 1
             code=$(printf '%s' "$body" | tail -n1)
+            # 402 = Vercel が利用上限超過でチームごと止めた（2026-11-06 実際に発生）。原因が一目で分かるよう印を付ける
+            [ "$code" = "402" ] && echo "$1" >> /tmp/payment_required
             [ "$code" = "200" ] && printf '%s' "$body" | grep -q -- "$2"
           }
           down_list() {
@@ -67,6 +72,11 @@ jobs:
             TARGETS="$SITES"
             # 練習: 1回目だけ、存在しないページを「止まったサイト」として混ぜる
             [ -n "$DRILL" ] && [ "$ROUND" = 1 ] && TARGETS="$SITES"$'\n''練習用（存在しないページ）|https://deeq.jp/__deeq_status_drill__|DEEQ_STATUS_DRILL'
+            rm -f /tmp/payment_required
+            # 1時間に1回、Vercel の利用量が上限に近づいていないか確認する
+            if [ -n "${VERCEL_USAGE_TOKEN:-}" ] && [ $(( ROUND % 6 )) = 1 ]; then
+              bash scripts/vercel-usage.sh || echo "::warning::利用量の確認に失敗しました"
+            fi
             first=$(down_list "$TARGETS")
             still=""
             if [ -n "$first" ]; then sleep 60; still=$(down_list "$first"); fi
@@ -76,6 +86,11 @@ jobs:
               echo "$NOW 応答なし: $names"
               if [ -z "$OPEN" ]; then
                 list=$(printf '%s' "$still" | awk -F'|' '{print "- " $1 "（" $2 "）"}')
+                if [ -s /tmp/payment_required ]; then
+                  list="$list
+
+          **原因: Vercel の利用上限超過による停止です（Payment required）。** サーバーの故障や攻撃ではありません。慎に「Vercelの停止を解除したい」と伝えてください。"
+                fi
                 gh issue create -R "$REPO" -l down --title "【停止の可能性】${names} が応答していません（${NOW}）" \
                   --body "@qitano-inc ${NOW}（日本時間）に確認したところ、1分おいて2回確認しても応答がありませんでした。
 
