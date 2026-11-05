@@ -42,7 +42,8 @@ jobs:
           オンライン予約|https://yoyaku.deeq.jp/api/v1/tenants/by-slug/kitano-kinse|tenant_id
           AI姿勢分析|https://ai.deeq.jp/|<html
           deeq.jp|https://deeq.jp/|DEEQ
-          qitano.com|https://qitano.com/|QITANO'
+          qitano.com|https://qitano.com/|QITANO
+          定期処理（止まっている処理の名前はこのURLで確認）|https://crm.deeq.jp/api/health/crons|"ok":true'
           check() {
             local body code
             body=$(curl -sS -L -m 30 -A "$UA" -w '\n%{http_code}' "$1" 2>/dev/null) || return 1
