@@ -89,7 +89,7 @@ jobs:
                 if [ -s /tmp/payment_required ]; then
                   list="$list
 
-          **原因: Vercel の利用上限超過による停止です（Payment required）。** サーバーの故障や攻撃ではありません。慎に「Vercelの停止を解除したい」と伝えてください。"
+          **原因: Vercel の利用上限超過による停止です（Payment required）。** サーバーの故障や攻撃ではありません。慎に「Vercelの停止を解除したい」と伝えてください（Vercel にあるのは AI姿勢分析だけです）。"
                 fi
                 gh issue create -R "$REPO" -l down --title "【停止の可能性】${names} が応答していません（${NOW}）" \
                   --body "@qitano-inc ${NOW}（日本時間）に確認したところ、1分おいて2回確認しても応答がありませんでした。
