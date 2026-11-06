@@ -99,6 +99,19 @@ jobs:
           初動手順: 止める→残す→変える→調べる→知らせる（社内の手順書㉞ AI_TEAM/guidelines/34_incident_response_playbook.md）
           復旧を確認したら、この Issue に書き込んで自動で閉じます。
           実行: $RUN_URL" || echo "::warning::Issue を作れませんでした"
+              elif known=$(gh issue view "$OPEN" -R "$REPO" --json body,comments -q '.body + "\n" + ([.comments[].body] | join("\n"))' 2>/dev/null); then
+                # 開いている Issue にまだ載っていないサイトが新たに止まったら、同じ Issue に書き足して通知する。
+                # 2026-11-07: AI姿勢分析の長期停止で Issue が開いたままになり、CRM が止まっても通知されない状態だった。
+                new=$(printf '%s' "$still" | while IFS='|' read -r name url want; do
+                  [ -n "$name" ] && ! grep -qF -- "$url" <<< "$known" && echo "- ${name}（${url}）"
+                done)
+                if [ -n "$new" ]; then
+                  gh issue comment "$OPEN" -R "$REPO" -b "@qitano-inc ${NOW}（日本時間）、新たに次のサイトも応答していません。
+
+          ${new}
+
+          実行: $RUN_URL" || echo "::warning::Issue に書き足せませんでした"
+                fi
               fi
             else
               echo "$NOW すべて正常"
