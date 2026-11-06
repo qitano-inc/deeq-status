@@ -103,7 +103,7 @@ jobs:
                 # 開いている Issue にまだ載っていないサイトが新たに止まったら、同じ Issue に書き足して通知する。
                 # 2026-11-07: AI姿勢分析の長期停止で Issue が開いたままになり、CRM が止まっても通知されない状態だった。
                 new=$(printf '%s' "$still" | while IFS='|' read -r name url want; do
-                  [ -n "$name" ] && ! grep -qF -- "$url" <<< "$known" && echo "- ${name}（${url}）"
+                  if [ -n "$name" ] && ! grep -qF -- "$url" <<< "$known"; then echo "- ${name}（${url}）"; fi
                 done)
                 if [ -n "$new" ]; then
                   gh issue comment "$OPEN" -R "$REPO" -b "@qitano-inc ${NOW}（日本時間）、新たに次のサイトも応答していません。
