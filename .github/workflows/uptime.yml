@@ -102,18 +102,41 @@ jobs:
               elif ! known=$(gh api "repos/$REPO/issues/$OPEN" --jq .body && gh api "repos/$REPO/issues/$OPEN/comments" --paginate --jq '.[].body'); then
                 echo "::warning::開いている Issue #$OPEN を読めず、新たな停止の確認を飛ばしました"
               else
-                # 開いている Issue にまだ載っていないサイトが新たに止まったら、同じ Issue に書き足して通知する。
-                # 2026-11-07: AI姿勢分析の長期停止で Issue が開いたままになり、CRM が止まっても通知されない状態だった。
-                # $still は最後の改行が落ちているので、改行を足して最後の1件も読む
-                new=$(printf '%s\n' "$still" | while IFS='|' read -r name url want; do
-                  if [ -n "$name" ] && ! grep -qF -- "$url" <<< "$known"; then echo "- ${name}（${url}）"; fi
+                # 2026-11-17: 開いている Issue に載っているのに今は応答しているサイトがあれば、その Issue を閉じ、
+                # まだ止まっているサイトだけで Issue を作り直す。閉じないと、載っているサイト（CRM 等）が後で本当に
+                # 止まっても「報告済み」と扱われ通知されない（Issue #5 が AI姿勢分析の長期停止で11/06から開いたままだった）。
+                recovered=$(printf '%s\n' "$SITES" | while IFS='|' read -r name url want; do
+                  name=$(echo "$name" | xargs); [ -z "$name" ] && continue
+                  if grep -qF -- "$url" <<< "$known" && ! grep -qF -- "$url" <<< "$still"; then echo "- ${name}（${url}）"; fi
                 done)
-                if [ -n "$new" ]; then
-                  gh issue comment "$OPEN" -R "$REPO" -b "@qitano-inc ${NOW}（日本時間）、新たに次のサイトも応答していません。
+                if [ -n "$recovered" ]; then
+                  list=$(printf '%s\n' "$still" | awk -F'|' 'NF>1{print "- " $1 "（" $2 "）"}')
+                  gh issue close "$OPEN" -R "$REPO" -c "${NOW}（日本時間）、次のサイトは復旧しました。
+
+          ${recovered}
+
+          まだ応答していないサイトは、新しい Issue で引き続き見張ります。" || echo "::warning::Issue #$OPEN を閉じられませんでした"
+                  gh issue create -R "$REPO" -l down --title "【継続中】${names} が応答していません（${NOW} 時点）" \
+                    --body "#${OPEN} から引き継ぎました。${NOW}（日本時間）時点で、次のサイトがまだ応答していません。
+
+          ${list}
+
+          ここに載っていないサイトが新たに止まったら、この Issue に @qitano-inc 付きで書き足して通知します。
+          実行: $RUN_URL" || echo "::warning::Issue を作れませんでした"
+                else
+                  # 開いている Issue にまだ載っていないサイトが新たに止まったら、同じ Issue に書き足して通知する。
+                  # 2026-11-07: AI姿勢分析の長期停止で Issue が開いたままになり、CRM が止まっても通知されない状態だった。
+                  # $still は最後の改行が落ちているので、改行を足して最後の1件も読む
+                  new=$(printf '%s\n' "$still" | while IFS='|' read -r name url want; do
+                    if [ -n "$name" ] && ! grep -qF -- "$url" <<< "$known"; then echo "- ${name}（${url}）"; fi
+                  done)
+                  if [ -n "$new" ]; then
+                    gh issue comment "$OPEN" -R "$REPO" -b "@qitano-inc ${NOW}（日本時間）、新たに次のサイトも応答していません。
 
           ${new}
 
           実行: $RUN_URL" || echo "::warning::Issue に書き足せませんでした"
+                  fi
                 fi
               fi
             else
